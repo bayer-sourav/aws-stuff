@@ -1,0 +1,19 @@
+# local / generated
+.state/
+.DS_Store
+*.swp
+*~
+
+# secrets / creds — never commit
+.env
+.env.*
+*.pem
+*.key
+credentials
+config.local
+
+# AWS CLI / terraform scratch (if added later)
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
