@@ -45,7 +45,7 @@ export AWS_REGION=us-east-1
 # Cursor: Remote-SSH: Connect to Host… → sast-lab
 # or: ssh sast-lab
 
-./destroy.sh          # terminate + remove SSH Host entry
+./destroy.sh          # instance + SG + IAM role/profile + EC2 key pair + SSH Host
 ```
 
 ## Connect from Cursor IDE
@@ -84,7 +84,7 @@ No inbound port 22 — traffic goes through Session Manager. Sanity check: `ssh 
 | File | Role |
 | --- | --- |
 | `create.sh` | IAM + SG + key + launch + SSH config + wait for SSM Online |
-| `destroy.sh` | Terminate instance + remove SSH Host block |
+| `destroy.sh` | Full teardown: instance, SG, IAM role/profile, EC2 key pair, SSH Host |
 | `INSTANCE.md` | Fingerprint of the original lab box |
 
 ## Notes
@@ -92,5 +92,5 @@ No inbound port 22 — traffic goes through Session Manager. Sanity check: `ssh 
 - **Cost:** `g6e.4xlarge` is pricey. Destroy when idle.
 - **Not a full disk clone:** This recreates the *platform* (GPU AL2023 + SSM), not your `~/Projects` data. Copy repos from git / S3 yourself.
 - **SSM not coming Online:** instance needs outbound HTTPS (NAT/IGW or SSM interface endpoints) and the managed policy on the instance role.
-- **IAM / SG / key reuse:** `create.sh` is idempotent for role, profile, SG, and key pair; only the instance (and SSH HostName) is new each run.
-- **Existing key pair:** if `KEY_NAME` already exists in the account, it must match your local `SSH_IDENTITY` pubkey or SSH/Cursor auth will fail — delete the EC2 key pair or pick another `KEY_NAME`.
+- **IAM / SG / key:** `create.sh` reuses them if they still exist; `destroy.sh` deletes them all (not your local private key).
+- **Existing key pair:** if `KEY_NAME` already exists in the account from something else, destroy will delete it when `KEY_NAME` matches — use a dedicated name (default `sast-lab`).
