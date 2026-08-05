@@ -47,18 +47,17 @@ else
 fi
 
 # --- networking ---
-if [[ -z "$SUBNET_ID" ]]; then
+# Default: no subnet → EC2 picks any default-VPC AZ (avoids InsufficientInstanceCapacity on one AZ).
+# Set SUBNET_ID=subnet-xxx to pin an AZ.
+if [[ -n "$SUBNET_ID" ]]; then
+  VPC_ID="$(aws ec2 describe-subnets --region "$REGION" --subnet-ids "$SUBNET_ID" \
+    --query 'Subnets[0].VpcId' --output text)"
+  echo "using subnet=$SUBNET_ID vpc=$VPC_ID (AZ pinned by subnet)"
+else
   VPC_ID="$(aws ec2 describe-vpcs --region "$REGION" --filters Name=isDefault,Values=true \
     --query 'Vpcs[0].VpcId' --output text)"
   [[ "$VPC_ID" != "None" && -n "$VPC_ID" ]] || { echo "no default VPC; set SUBNET_ID=" >&2; exit 1; }
-  SUBNET_ID="$(aws ec2 describe-subnets --region "$REGION" \
-    --filters Name=vpc-id,Values="$VPC_ID" Name=default-for-az,Values=true \
-    --query 'Subnets[0].SubnetId' --output text)"
-  echo "using default vpc=$VPC_ID subnet=$SUBNET_ID"
-else
-  VPC_ID="$(aws ec2 describe-subnets --region "$REGION" --subnet-ids "$SUBNET_ID" \
-    --query 'Subnets[0].VpcId' --output text)"
-  echo "using subnet=$SUBNET_ID vpc=$VPC_ID"
+  echo "using default vpc=$VPC_ID (no subnet — AZ chosen by EC2)"
 fi
 
 SG_ID="$(aws ec2 describe-security-groups --region "$REGION" \
@@ -85,7 +84,6 @@ RUN_ARGS=(
   --region "$REGION"
   --image-id "$AMI_ID"
   --instance-type "$INSTANCE_TYPE"
-  --subnet-id "$SUBNET_ID"
   --security-group-ids "$SG_ID"
   --iam-instance-profile "Name=$PROFILE_NAME"
   --block-device-mappings "DeviceName=/dev/xvda,Ebs={VolumeSize=${VOLUME_SIZE},VolumeType=gp3,DeleteOnTermination=true}"
@@ -96,6 +94,10 @@ RUN_ARGS=(
 # Associate a public IP so the instance can reach SSM endpoints without a VPC endpoint.
 # (If your subnet/VPC already has SSM endpoints, you can drop this.)
 RUN_ARGS+=(--associate-public-ip-address)
+
+if [[ -n "$SUBNET_ID" ]]; then
+  RUN_ARGS+=(--subnet-id "$SUBNET_ID")
+fi
 
 if [[ -n "$KEY_NAME" ]]; then
   RUN_ARGS+=(--key-name "$KEY_NAME")

@@ -35,7 +35,7 @@ export AWS_REGION=us-east-1
 # export VOLUME_SIZE=300
 # export NAME=sast-lab
 # export KEY_NAME=my-keypair         # optional; SSM does not need it
-# export SUBNET_ID=subnet-xxxxxxxx
+# export SUBNET_ID=subnet-xxxxxxxx   # optional; pins AZ — omit to let EC2 pick
 
 ./create.sh
 ./connect.sh          # uses last launched instance
@@ -55,7 +55,7 @@ export AWS_REGION=us-east-1
 | `ROLE_NAME` | `${NAME}-ssm-role` | IAM role |
 | `PROFILE_NAME` | `${NAME}-ssm-profile` | Instance profile |
 | `SG_NAME` | `${NAME}-ssm-sg` | Security group |
-| `SUBNET_ID` | default VPC subnet | Where to launch |
+| `SUBNET_ID` | _(empty — any AZ)_ | Pin a subnet/AZ; omit so EC2 picks capacity |
 | `KEY_NAME` | _(empty)_ | Optional SSH key |
 | `AMI_ID` | looked up | Override AMI |
 | `AMI_PARAM` | DLAMI base OSS nvidia AL2023 latest | SSM parameter for AMI lookup |
