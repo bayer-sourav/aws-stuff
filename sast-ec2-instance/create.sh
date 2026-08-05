@@ -126,6 +126,28 @@ fi
 # --- networking ---
 # Collect candidate subnets (one per AZ). We try each until RunInstances succeeds —
 # omitting --subnet-id does NOT retry AZs; EC2 picks one and fails if that AZ is dry.
+# (macOS bash 3.2: no mapfile/shuf — use a portable loader.)
+load_subnets() {
+  # usage: load_subnets <aws-filters...>  → fills SUBNETS array (shuffled)
+  SUBNETS=()
+  local sid
+  # sort -R is on both GNU and BSD; awk NR random is a fallback if sort -R missing
+  local list
+  list="$(aws ec2 describe-subnets --region "$REGION" --filters "$@" \
+    --query 'Subnets[].SubnetId' --output text 2>/dev/null | tr '\t' '\n' | grep -v '^$' || true)"
+  [[ -n "$list" ]] || return 0
+  if list="$(printf '%s\n' "$list" | sort -R 2>/dev/null)"; then
+    :
+  else
+    list="$(printf '%s\n' "$list" | awk 'BEGIN{srand()} {print rand() "\t" $0}' | sort -n | cut -f2-)"
+  fi
+  while IFS= read -r sid; do
+    [[ -n "$sid" ]] && SUBNETS[${#SUBNETS[@]}]="$sid"
+  done <<EOF
+$list
+EOF
+}
+
 if [[ -n "$SUBNET_ID" ]]; then
   VPC_ID="$(aws ec2 describe-subnets --region "$REGION" --subnet-ids "$SUBNET_ID" \
     --query 'Subnets[0].VpcId' --output text)"
@@ -135,18 +157,14 @@ else
   VPC_ID="$(aws ec2 describe-vpcs --region "$REGION" --filters Name=isDefault,Values=true \
     --query 'Vpcs[0].VpcId' --output text)"
   [[ "$VPC_ID" != "None" && -n "$VPC_ID" ]] || { echo "no default VPC; set SUBNET_ID=" >&2; exit 1; }
-  mapfile -t SUBNETS < <(aws ec2 describe-subnets --region "$REGION" \
-    --filters "Name=vpc-id,Values=$VPC_ID" "Name=default-for-az,Values=true" \
-    --query 'Subnets[].SubnetId' --output text | tr '\t' '\n' | shuf)
-  [[ ${#SUBNETS[@]} -gt 0 ]] || {
-    mapfile -t SUBNETS < <(aws ec2 describe-subnets --region "$REGION" \
-      --filters "Name=vpc-id,Values=$VPC_ID" \
-      --query 'Subnets[].SubnetId' --output text | tr '\t' '\n' | shuf)
-  }
-  [[ ${#SUBNETS[@]} -gt 0 && -n "${SUBNETS[0]:-}" ]] || {
+  load_subnets "Name=vpc-id,Values=$VPC_ID" "Name=default-for-az,Values=true"
+  if [[ ${#SUBNETS[@]} -eq 0 ]]; then
+    load_subnets "Name=vpc-id,Values=$VPC_ID"
+  fi
+  if [[ ${#SUBNETS[@]} -eq 0 ]]; then
     echo "no subnets in vpc $VPC_ID" >&2
     exit 1
-  }
+  fi
   echo "using default vpc=$VPC_ID — will try ${#SUBNETS[@]} AZ(s) for capacity"
 fi
 
@@ -171,7 +189,11 @@ fi
 # INSTANCE_TYPES: comma/space list to try if preferred type has no capacity (optional).
 # e.g. INSTANCE_TYPES="g6e.4xlarge,g6e.2xlarge,g6.4xlarge"
 INSTANCE_TYPES="${INSTANCE_TYPES:-$INSTANCE_TYPE}"
-read -r -a TYPE_LIST <<<"${INSTANCE_TYPES//,/ }"
+TYPE_LIST=()
+_types="${INSTANCE_TYPES//,/ }"
+for _t in $_types; do
+  TYPE_LIST[${#TYPE_LIST[@]}]="$_t"
+done
 
 echo "ami=$AMI_ID types=${TYPE_LIST[*]} root=${VOLUME_SIZE}G"
 
