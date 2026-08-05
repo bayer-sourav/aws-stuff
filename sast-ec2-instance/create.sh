@@ -124,17 +124,30 @@ else
 fi
 
 # --- networking ---
-# Default: no subnet → EC2 picks any default-VPC AZ (avoids InsufficientInstanceCapacity on one AZ).
-# Set SUBNET_ID=subnet-xxx to pin an AZ.
+# Collect candidate subnets (one per AZ). We try each until RunInstances succeeds —
+# omitting --subnet-id does NOT retry AZs; EC2 picks one and fails if that AZ is dry.
 if [[ -n "$SUBNET_ID" ]]; then
   VPC_ID="$(aws ec2 describe-subnets --region "$REGION" --subnet-ids "$SUBNET_ID" \
     --query 'Subnets[0].VpcId' --output text)"
-  echo "using subnet=$SUBNET_ID vpc=$VPC_ID (AZ pinned by subnet)"
+  SUBNETS=("$SUBNET_ID")
+  echo "using subnet=$SUBNET_ID vpc=$VPC_ID (pinned)"
 else
   VPC_ID="$(aws ec2 describe-vpcs --region "$REGION" --filters Name=isDefault,Values=true \
     --query 'Vpcs[0].VpcId' --output text)"
   [[ "$VPC_ID" != "None" && -n "$VPC_ID" ]] || { echo "no default VPC; set SUBNET_ID=" >&2; exit 1; }
-  echo "using default vpc=$VPC_ID (no subnet — AZ chosen by EC2)"
+  mapfile -t SUBNETS < <(aws ec2 describe-subnets --region "$REGION" \
+    --filters "Name=vpc-id,Values=$VPC_ID" "Name=default-for-az,Values=true" \
+    --query 'Subnets[].SubnetId' --output text | tr '\t' '\n' | shuf)
+  [[ ${#SUBNETS[@]} -gt 0 ]] || {
+    mapfile -t SUBNETS < <(aws ec2 describe-subnets --region "$REGION" \
+      --filters "Name=vpc-id,Values=$VPC_ID" \
+      --query 'Subnets[].SubnetId' --output text | tr '\t' '\n' | shuf)
+  }
+  [[ ${#SUBNETS[@]} -gt 0 && -n "${SUBNETS[0]:-}" ]] || {
+    echo "no subnets in vpc $VPC_ID" >&2
+    exit 1
+  }
+  echo "using default vpc=$VPC_ID — will try ${#SUBNETS[@]} AZ(s) for capacity"
 fi
 
 SG_ID="$(aws ec2 describe-security-groups --region "$REGION" \
@@ -145,7 +158,6 @@ if [[ -z "$SG_ID" || "$SG_ID" == "None" ]]; then
   SG_ID="$(aws ec2 create-security-group --region "$REGION" \
     --group-name "$SG_NAME" --description "SSM-only lab ($NAME)" --vpc-id "$VPC_ID" \
     --query GroupId --output text)"
-  # default egress allow-all is fine for Session Manager + package installs
 else
   echo "security group $SG_ID already exists"
 fi
@@ -155,29 +167,65 @@ if [[ -z "$AMI_ID" ]]; then
   AMI_ID="$(aws ssm get-parameter --region "$REGION" --name "$AMI_PARAM" \
     --query 'Parameter.Value' --output text)"
 fi
-echo "ami=$AMI_ID type=$INSTANCE_TYPE root=${VOLUME_SIZE}G"
 
-RUN_ARGS=(
-  --region "$REGION"
-  --image-id "$AMI_ID"
-  --instance-type "$INSTANCE_TYPE"
-  --security-group-ids "$SG_ID"
-  --iam-instance-profile "Name=$PROFILE_NAME"
-  --key-name "$KEY_NAME"
-  --block-device-mappings "DeviceName=/dev/xvda,Ebs={VolumeSize=${VOLUME_SIZE},VolumeType=gp3,DeleteOnTermination=true}"
-  --metadata-options "HttpTokens=required,HttpEndpoint=enabled,InstanceMetadataTags=enabled"
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${NAME}}]"
-  --count 1
-)
-# Associate a public IP so the instance can reach SSM endpoints without a VPC endpoint.
-# (If your subnet/VPC already has SSM endpoints, you can drop this.)
-RUN_ARGS+=(--associate-public-ip-address)
+# INSTANCE_TYPES: comma/space list to try if preferred type has no capacity (optional).
+# e.g. INSTANCE_TYPES="g6e.4xlarge,g6e.2xlarge,g6.4xlarge"
+INSTANCE_TYPES="${INSTANCE_TYPES:-$INSTANCE_TYPE}"
+read -r -a TYPE_LIST <<<"${INSTANCE_TYPES//,/ }"
 
-if [[ -n "$SUBNET_ID" ]]; then
-  RUN_ARGS+=(--subnet-id "$SUBNET_ID")
+echo "ami=$AMI_ID types=${TYPE_LIST[*]} root=${VOLUME_SIZE}G"
+
+INSTANCE_ID=""
+CHOSEN_TYPE=""
+CHOSEN_SUBNET=""
+LAST_ERR=""
+
+for itype in "${TYPE_LIST[@]}"; do
+  for subnet in "${SUBNETS[@]}"; do
+    az="$(aws ec2 describe-subnets --region "$REGION" --subnet-ids "$subnet" \
+      --query 'Subnets[0].AvailabilityZone' --output text)"
+    echo "trying type=$itype az=$az subnet=$subnet ..."
+    set +e
+    OUT="$(aws ec2 run-instances \
+      --region "$REGION" \
+      --image-id "$AMI_ID" \
+      --instance-type "$itype" \
+      --subnet-id "$subnet" \
+      --security-group-ids "$SG_ID" \
+      --iam-instance-profile "Name=$PROFILE_NAME" \
+      --key-name "$KEY_NAME" \
+      --associate-public-ip-address \
+      --block-device-mappings "DeviceName=/dev/xvda,Ebs={VolumeSize=${VOLUME_SIZE},VolumeType=gp3,DeleteOnTermination=true}" \
+      --metadata-options "HttpTokens=required,HttpEndpoint=enabled,InstanceMetadataTags=enabled" \
+      --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${NAME}}]" \
+      --count 1 \
+      --query 'Instances[0].InstanceId' --output text 2>&1)"
+    RC=$?
+    set -e
+    if [[ $RC -eq 0 && "$OUT" == i-* ]]; then
+      INSTANCE_ID="$OUT"
+      CHOSEN_TYPE="$itype"
+      CHOSEN_SUBNET="$subnet"
+      echo "launched $INSTANCE_ID ($itype in $az)"
+      break 2
+    fi
+    LAST_ERR="$OUT"
+    if echo "$OUT" | grep -qiE 'InsufficientInstanceCapacity|InsufficientHostCapacity|Unsupported|Not available in'; then
+      echo "  no capacity / unavailable — next"
+      continue
+    fi
+    echo "$OUT" >&2
+    exit 1
+  done
+done
+
+if [[ -z "$INSTANCE_ID" ]]; then
+  echo "no capacity for types [${TYPE_LIST[*]}] across tried AZs in $REGION" >&2
+  echo "tips: try another region (AWS_REGION=...), or INSTANCE_TYPES=\"g6e.4xlarge,g6e.2xlarge,g6.4xlarge\"" >&2
+  echo "last error: $LAST_ERR" >&2
+  exit 1
 fi
 
-INSTANCE_ID="$(aws ec2 run-instances "${RUN_ARGS[@]}" --query 'Instances[0].InstanceId' --output text)"
 echo "launched $INSTANCE_ID — waiting for running..."
 aws ec2 wait instance-running --region "$REGION" --instance-ids "$INSTANCE_ID"
 
@@ -208,6 +256,8 @@ cat <<EOF
 
 Ready.
   instance: $INSTANCE_ID
+  type:     $CHOSEN_TYPE
+  subnet:   $CHOSEN_SUBNET
   region:   $REGION
   ssh host: $SSH_HOST
 

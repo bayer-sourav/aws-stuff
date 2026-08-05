@@ -65,12 +65,13 @@ No inbound port 22 — traffic goes through Session Manager. Sanity check: `ssh 
 | --- | --- | --- |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | `us-east-1` | Region |
 | `NAME` | `sast-lab` | Name tag + prefix for role/SG/key |
-| `INSTANCE_TYPE` | `g6e.4xlarge` | EC2 type |
+| `INSTANCE_TYPE` | `g6e.4xlarge` | Preferred EC2 type |
+| `INSTANCE_TYPES` | `$INSTANCE_TYPE` | Comma list to try on capacity miss, e.g. `g6e.4xlarge,g6e.2xlarge` |
 | `VOLUME_SIZE` | `300` | Root EBS size (GiB) |
 | `ROLE_NAME` | `${NAME}-ssm-role` | IAM role |
 | `PROFILE_NAME` | `${NAME}-ssm-profile` | Instance profile |
 | `SG_NAME` | `${NAME}-ssm-sg` | Security group |
-| `SUBNET_ID` | _(empty — any AZ)_ | Pin a subnet/AZ; omit so EC2 picks capacity |
+| `SUBNET_ID` | _(empty)_ | Pin one subnet; omit to try every default-VPC AZ for capacity |
 | `KEY_NAME` | `${NAME}` | EC2 key pair (imported from local pubkey if missing) |
 | `SSH_IDENTITY` | `~/.ssh/id_ed25519` or `id_rsa` | Private key path (`.pub` must exist) |
 | `SSH_HOST` | `${NAME}` | Name shown in Cursor / `ssh` |
@@ -89,6 +90,7 @@ No inbound port 22 — traffic goes through Session Manager. Sanity check: `ssh 
 
 ## Notes
 
+- **Capacity:** `g6e.*` is often scarce. `create.sh` walks all default-VPC AZs (and optional `INSTANCE_TYPES` fallbacks). If everything fails, try another `AWS_REGION` or smaller type.
 - **Cost:** `g6e.4xlarge` is pricey. Destroy when idle.
 - **Not a full disk clone:** This recreates the *platform* (GPU AL2023 + SSM), not your `~/Projects` data. Copy repos from git / S3 yourself.
 - **SSM not coming Online:** instance needs outbound HTTPS (NAT/IGW or SSM interface endpoints) and the managed policy on the instance role.

@@ -24,5 +24,5 @@ The recreate script intentionally:
 
 1. Looks up a **public** Deep Learning Base OSS Nvidia Driver GPU AMI (AL2023) in the target region
 2. Creates a fresh IAM role + instance profile with `AmazonSSMManagedInstanceCore`
-3. Uses the default VPC without pinning a subnet/AZ (or `SUBNET_ID` if you set one)
+3. Tries every default-VPC AZ for capacity (or `SUBNET_ID` if you pin one)
 4. Opens **no inbound** SG rules — Session Manager only needs outbound HTTPS
