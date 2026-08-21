@@ -68,6 +68,11 @@ upsert_ssh_config() {
   local begin="# BEGIN aws-stuff:${SSH_HOST}"
   local end="# END aws-stuff:${SSH_HOST}"
   local block tmp
+  # Cursor Remote-SSH does not inherit your shell's AWS_PROFILE; bake it into ProxyCommand.
+  local profile_flag=""
+  if [[ -n "${AWS_PROFILE:-}" ]]; then
+    profile_flag=" --profile ${AWS_PROFILE}"
+  fi
   block="$(cat <<EOF
 ${begin}
 Host ${SSH_HOST}
@@ -77,7 +82,7 @@ Host ${SSH_HOST}
   IdentitiesOnly yes
   StrictHostKeyChecking accept-new
   UserKnownHostsFile ${HOME}/.ssh/known_hosts.aws-stuff
-  ProxyCommand aws ssm start-session --target %h --region ${REGION} --document-name AWS-StartSSHSession --parameters "portNumber=%p"
+  ProxyCommand aws ssm start-session --target %h --region ${REGION}${profile_flag} --document-name AWS-StartSSHSession --parameters "portNumber=%p"
 ${end}
 EOF
 )"

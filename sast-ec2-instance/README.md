@@ -44,6 +44,9 @@ export AWS_REGION=us-east-1
 
 # Cursor: Remote-SSH: Connect to Host… → sast-lab
 # or: ssh sast-lab
+#
+# If you used AWS_PROFILE=... for create.sh, it is written into the Host
+# ProxyCommand so Cursor Remote-SSH works without exporting the profile.
 
 ./destroy.sh          # instance + SG + IAM role/profile + EC2 key pair + SSH Host
 ```
@@ -77,6 +80,7 @@ No inbound port 22 — traffic goes through Session Manager. Sanity check: `ssh 
 | `SSH_HOST` | `${NAME}` | Name shown in Cursor / `ssh` |
 | `SSH_CONFIG` | `~/.ssh/config` | Where to write the Host block |
 | `SKIP_SSH_CONFIG` | `0` | Set `1` to skip SSH config update |
+| `AWS_PROFILE` | _(empty)_ | If set, baked into the SSH `ProxyCommand` (needed for Cursor; it won’t see your shell env) |
 | `AMI_ID` | looked up | Override AMI |
 | `AMI_PARAM` | DLAMI base OSS nvidia AL2023 latest | SSM parameter for AMI lookup |
 
